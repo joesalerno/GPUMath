@@ -2,8 +2,8 @@
 override L: u32 = 64u;
 override F: u32 = 32u;
 
-struct BigInt { limbs: array<u32, L> }
-struct Data { values: array<BigInt> }
+struct LargeInt { limbs: array<u32, L> }
+struct Data { values: array<LargeInt> }
 
 // For Compute Shaders
 @group(0) @binding(0) var<storage, read> bufA : Data;
@@ -15,9 +15,9 @@ struct Data { values: array<BigInt> }
 // This structure holds camera data for rendering, including the center coordinates,
 // the scale (zoom level), and the screen resolution.
 struct Camera {
-    centerX: BigInt,
-    centerY: BigInt,
-    scale: BigInt, // Scale per pixel
+    centerX: LargeInt,
+    centerY: LargeInt,
+    scale: LargeInt, // Scale per pixel
     resolution: vec2<f32>
 }
 @group(0) @binding(0) var<storage, read> cam : Camera;
@@ -38,7 +38,7 @@ fn mac(a: u32, b: u32, c: u32, carry: u32) -> vec2<u32> {
 }
 
 // Add (In-Place): A += B
-fn add(a: ptr<function, BigInt>, b: BigInt) {
+fn add(a: ptr<function, LargeInt>, b: LargeInt) {
     var c=0u;
     for(var i=0u; i<L; i++){
         let v=(*a).limbs[i];
@@ -49,7 +49,7 @@ fn add(a: ptr<function, BigInt>, b: BigInt) {
 }
 
 // Sub (In-Place): A -= B
-fn sub(a: ptr<function, BigInt>, b: BigInt) {
+fn sub(a: ptr<function, LargeInt>, b: LargeInt) {
     var r=0u;
     for(var i=0u; i<L; i++){
         let v=(*a).limbs[i];
@@ -61,7 +61,7 @@ fn sub(a: ptr<function, BigInt>, b: BigInt) {
 }
 
 // Negate (Two's Complement): A = -A
-fn neg(a: ptr<function, BigInt>) {
+fn neg(a: ptr<function, LargeInt>) {
     var c=1u;
     for(var i=0u; i<L; i++) {
         let v = ~(*a).limbs[i];
@@ -73,12 +73,12 @@ fn neg(a: ptr<function, BigInt>) {
 }
 
 // Check if Negative (MSB set)
-fn is_neg(a: BigInt) -> bool {
+fn is_neg(a: LargeInt) -> bool {
     return (a.limbs[L-1u] >> 31u) == 1u;
 }
 
 // Shift Left: A <<= 1
-fn shl1(a: ptr<function, BigInt>) {
+fn shl1(a: ptr<function, LargeInt>) {
     var c=0u;
     for(var i=0u; i<L; i++){
         let v=(*a).limbs[i];
@@ -89,7 +89,7 @@ fn shl1(a: ptr<function, BigInt>) {
 }
 
 // Greater Than or Equal (Unsigned)
-fn gte(a: ptr<function, BigInt>, b: BigInt) -> bool {
+fn gte(a: ptr<function, LargeInt>, b: LargeInt) -> bool {
     for(var k=0u; k<L; k++) {
         let i=L-1u-k;
         if((*a).limbs[i]>b.limbs[i]){return true;}
@@ -99,7 +99,7 @@ fn gte(a: ptr<function, BigInt>, b: BigInt) -> bool {
 }
 
 // Scalar Div: A /= scalar (O(N))
-fn div_scalar(a: ptr<function, BigInt>, b: u32) {
+fn div_scalar(a: ptr<function, LargeInt>, b: u32) {
     var r=0u;
     for(var k=0u; k<L; k++){
         let i=L-1u-k;
@@ -111,7 +111,7 @@ fn div_scalar(a: ptr<function, BigInt>, b: u32) {
 }
 
 // Multiply (Unsigned Fixed Point): Returns (A * B) >> F
-fn mul_fixed_op_unsigned(a: BigInt, b: BigInt) -> BigInt {
+fn mul_fixed_op_unsigned(a: LargeInt, b: LargeInt) -> LargeInt {
     var t: array<u32, L*2>; // Temporary double width
     // Simple O(N^2) Schoolbook
     for(var i=0u; i<L; i++){
@@ -123,21 +123,21 @@ fn mul_fixed_op_unsigned(a: BigInt, b: BigInt) -> BigInt {
         }
         t[i+L]=c;
     }
-    var res:BigInt;
+    var res:LargeInt;
     // Extract middle part (Fixed Point result)
     for(var i=0u; i<L; i++){ res.limbs[i]=t[i+F]; }
     return res;
 }
 
 // Multiply (Integer): Returns (A * B) (Low L limbs)
-fn mul_int_op(a: BigInt, b: BigInt) -> BigInt {
-    var res:BigInt; for(var k=0u;k<L;k++){res.limbs[k]=0u;}
+fn mul_int_op(a: LargeInt, b: LargeInt) -> LargeInt {
+    var res:LargeInt; for(var k=0u;k<L;k++){res.limbs[k]=0u;}
     for(var i=0u;i<L;i++){ var c=0u; for(var j=0u;j<L;j++){ if(i+j<L){ let r=mac(a.limbs[i],b.limbs[j],res.limbs[i+j],c); res.limbs[i+j]=r.x; c=r.y; } } }
     return res;
 }
 
 // Signed Fixed Point Multiply
-fn mul_fixed(a: BigInt, b: BigInt) -> BigInt {
+fn mul_fixed(a: LargeInt, b: LargeInt) -> LargeInt {
     var va = a; var vb = b;
     let sa = is_neg(va);
     let sb = is_neg(vb);
@@ -151,13 +151,13 @@ fn mul_fixed(a: BigInt, b: BigInt) -> BigInt {
 }
 
 // Signed Fixed Point Square (Optimization potential, but mapped to mul for now)
-fn sqr_fixed(a: BigInt) -> BigInt {
+fn sqr_fixed(a: LargeInt) -> LargeInt {
     return mul_fixed(a, a);
 }
 
-// Int32 to BigInt (Signed)
-fn int_to_big(v: i32) -> BigInt {
-    var res: BigInt;
+// Int32 to LargeInt (Signed)
+fn int_to_big(v: i32) -> LargeInt {
+    var res: LargeInt;
     let u = u32(v);
     res.limbs[0] = u;
     var fill = 0u;
@@ -192,7 +192,7 @@ fn op_mul_int(@builtin(global_invocation_id) id: vec3<u32>) {
 fn op_div(@builtin(global_invocation_id) id: vec3<u32>) {
     let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
     // Binary Restoring Division (Fixed Point Logic)
-    var rem:BigInt; var quo:BigInt;
+    var rem:LargeInt; var quo:LargeInt;
     let total = (L + F) * 32u;
     let B = bufB.values[i];
 
@@ -213,7 +213,7 @@ fn op_div(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(64)
 fn op_mod(@builtin(global_invocation_id) id: vec3<u32>) {
     let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
-    var rem:BigInt; let B = bufB.values[i];
+    var rem:LargeInt; let B = bufB.values[i];
     for(var k=0u; k<L*32u; k++) {
         let idx = L*32u - 1u - k;
         let bit = (bufA.values[i].limbs[idx/32u] >> (idx%32u)) & 1u;
@@ -225,7 +225,7 @@ fn op_mod(@builtin(global_invocation_id) id: vec3<u32>) {
 @compute @workgroup_size(64)
 fn op_sqrt(@builtin(global_invocation_id) id: vec3<u32>) {
     let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
-    var rem:BigInt; var root:BigInt;
+    var rem:LargeInt; var root:LargeInt;
     for(var k=0u; k<L*16u; k++) {
         let pair = (L*16u) - 1u - k;
         let glob_bit = pair * 2u;
@@ -244,7 +244,7 @@ fn op_exp(@builtin(global_invocation_id) id: vec3<u32>) {
     let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
     let x = bufA.values[i];
     var term = x;
-    var sum: BigInt; sum.limbs[F] = 1u; add(&sum, x);
+    var sum: LargeInt; sum.limbs[F] = 1u; add(&sum, x);
     for(var k=2u; k<30u; k++) {
         term = mul_fixed_op_unsigned(term, x); // Assume positive x for simplicity or handle sign
         div_scalar(&term, k);
@@ -259,13 +259,13 @@ fn op_modpow(@builtin(global_invocation_id) id: vec3<u32>) {
     var base = bufA.values[idx];
     let exp  = bufB.values[idx];
     let mod_val  = bufC.values[idx];
-    var res: BigInt; res.limbs[0] = 1u;
+    var res: LargeInt; res.limbs[0] = 1u;
 
     for (var k=0u; k<L*32u; k++) {
         if (((exp.limbs[k/32u] >> (k%32u)) & 1u) == 1u) {
             var p = mul_int_op(res, base);
             // Inline Mod
-            var rem:BigInt;
+            var rem:LargeInt;
             for(var b=0u; b<L*32u; b++) {
                 let bi = L*32u - 1u - b;
                 let bit = (p.limbs[bi/32u] >> (bi%32u)) & 1u;
@@ -275,7 +275,7 @@ fn op_modpow(@builtin(global_invocation_id) id: vec3<u32>) {
             res = rem;
         }
         var p2 = mul_int_op(base, base);
-        var rem2:BigInt;
+        var rem2:LargeInt;
         for(var b=0u; b<L*32u; b++) {
             let bi = L*32u - 1u - b;
             let bit = (p2.limbs[bi/32u] >> (bi%32u)) & 1u;
@@ -293,7 +293,7 @@ fn op_trig(@builtin(global_invocation_id) id: vec3<u32>) {
     // 1. Argument Reduction (Mod 2PI)
     var x = bufA.values[i];
     let two_pi = bufB.values[0];
-    var rem:BigInt;
+    var rem:LargeInt;
     for(var k=0u; k<L*32u; k++) {
        let idx = L*32u - 1u - k;
        let bit = (x.limbs[idx/32u] >> (idx%32u)) & 1u;
@@ -362,10 +362,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // The core Mandelbrot fractal calculation.
     // It iterates on the formula Z = Z^2 + C, where Z and C are complex numbers,
     // to determine if a point is inside or outside the Mandelbrot set.
-    var zx: BigInt; // 0
-    var zy: BigInt; // 0
-    var zx2: BigInt;
-    var zy2: BigInt;
+    var zx: LargeInt; // 0
+    var zy: LargeInt; // 0
+    var zx2: LargeInt;
+    var zy2: LargeInt;
 
     var iter = 0u;
     let MAX = 255u;

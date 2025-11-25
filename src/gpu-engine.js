@@ -91,11 +91,7 @@ export class GPUEngine {
             layout: 'auto',
             vertex: {
                 module: this.shaderModule,
-                entryPoint: entryPointVS,
-                constants: {
-                    L: this.L,
-                    F: this.F,
-                }
+                entryPoint: entryPointVS
             },
             fragment: {
                 module: this.shaderModule,

@@ -1,4 +1,5 @@
 import { GPUEngine } from './gpu-engine.js';
+import { GPUOperations } from './gpu-operations.js';
 
 class App {
     constructor() {
@@ -7,6 +8,7 @@ class App {
         this.logDiv = document.getElementById('log');
 
         this.engine = new GPUEngine(64, 32); // L=64, F=32
+        this.math = new GPUOperations(this.engine);
         this.camera = {
             x: 0n,
             y: 0n,
@@ -29,7 +31,8 @@ class App {
 
     async init() {
         try {
-            await this.engine.init();
+            const shaderCode = await fetch('/fractal.wgsl').then(res => res.text());
+            await this.engine.init(shaderCode);
             this.log("GPU Engine Ready.");
         } catch (e) {
             this.log("Error: " + e.message);
@@ -47,7 +50,7 @@ class App {
     setupCanvas() {
         const format = navigator.gpu.getPreferredCanvasFormat();
         this.context.configure({ device: this.engine.device, format });
-        this.renderPipeline = this.engine.createRenderPipeline(format);
+        this.renderPipeline = this.engine.createRenderPipeline(format, 'vs_main', 'fs_main');
     }
 
     setupUI() {
@@ -158,19 +161,19 @@ class App {
             const B = this.engine.floatToBig(789.123);
             const negA = -A;
 
-            const sum = await this.engine.add([A], [B]);
+            const sum = await this.math.add([A], [B]);
             this.log(`ADD: 123.456 + 789.123 = ${this.engine.bigToFloatStr(sum[0])}`);
 
-            const mul = await this.engine.mul([A], [B]);
+            const mul = await this.math.mul([A], [B]);
             this.log(`MUL: 123.456 * 789.123 = ${this.engine.bigToFloatStr(mul[0])}`);
 
-            const mulNeg = await this.engine.mul([negA], [B]);
+            const mulNeg = await this.math.mul([negA], [B]);
             this.log(`MUL NEG: -123.456 * 789.123 = ${this.engine.bigToFloatStr(mulNeg[0])}`);
             if (this.engine.bigToFloatStr(mulNeg[0]).startsWith("-97421")) this.log("✅ Signed Math OK");
             else this.log("❌ Signed Math Fail");
 
             const PI = this.engine.floatToBig(3.14159265);
-            const sinPI = await this.engine.sin([PI]);
+            const sinPI = await this.math.sin([PI]);
             this.log(`SIN(PI): ${this.engine.bigToFloatStr(sinPI[0])} (Exp ~0)`);
         } catch (e) {
             this.log("Test Error: " + e);

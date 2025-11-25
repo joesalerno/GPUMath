@@ -1,109 +1,57 @@
-// --- GPU ENGINE CLASS ---
+import * as math from './math-utils.js';
+
 export class GPUEngine {
     constructor(L, F) {
-        this.device = null;
         this.L = L;
         this.F = F;
+        this.device = null;
+        this.shaderModule = null;
         this.pipelines = {};
         this.constants = {};
     }
 
-    async init() {
+    async init(shaderCode) {
         if (!navigator.gpu) throw new Error("WebGPU not supported");
         const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error("No GPU adapter found");
         this.device = await adapter.requestDevice();
-
-        this.shaderModule = await this._fetchAndCompileShader();
-        this._createComputePipelines();
+        this.shaderModule = this.device.createShaderModule({ code: shaderCode });
         this._createConstants();
-
         console.log("GPU Engine Initialized");
     }
 
-    async _fetchAndCompileShader() {
-        let shaderCode = await fetch('/fractal.wgsl').then(res => res.text());
-        shaderCode = shaderCode.replace(/override L: u32 = \d+u;/, `override L: u32 = ${this.L}u;`);
-        shaderCode = shaderCode.replace(/override F: u32 = \d+u;/, `override F: u32 = ${this.F}u;`);
-        return this.device.createShaderModule({ code: shaderCode });
-    }
-
-    _createComputePipelines() {
-        const ops = ['add', 'sub', 'mul', 'mul_int', 'div', 'mod', 'sqrt', 'exp', 'modpow', 'trig'];
-        ops.forEach(op => {
-            this.pipelines[op] = this.device.createComputePipeline({
+    createComputePipeline(entryPoint) {
+        if (!this.pipelines[entryPoint]) {
+            this.pipelines[entryPoint] = this.device.createComputePipeline({
                 layout: 'auto',
-                compute: { module: this.shaderModule, entryPoint: `op_${op}` }
+                compute: {
+                    module: this.shaderModule,
+                    entryPoint,
+                    constants: {
+                        L: this.L,
+                        F: this.F,
+                    }
+                }
             });
-        });
+        }
     }
 
     _createConstants() {
-        // Constants for Trig
         const TWO_PI = "6487ED5110B4611A62633145C06E0E68948127044533E63A0105DF531D89CD9128A57F477590822765A1523B06C758169135064731F29C35C7433877995643640F11C89874136C055F60B84D2B196C27F0922872A437C0994C3817F723223126848A183D5D7716944B8411D44686475C62281D6F2C33D14D89CD0627721535451D00B026859752D5D00B89C6D39E837D8D6228076635292415516053748259463991C6E6A2689240361245787680D311E6A1221430F7C2037953258A3668393526E3082989D22784566270E03C1A32766397FC30846503715C6C075D1C689849E94D414619379685954B469950796865074E182522770248430541E1837F359051680186591295320076214C236E0D2C76A288E8367F7D21E428C6466986693892801F41B68F807466540673059695655513A4997096696C7540D3708D64C7203780D774653697968525049964585354972410";
-        this.constants.two_pi = this.createBuffer(this.hexToFixed(TWO_PI));
+        this.constants.two_pi = this.createBuffer(math.hexToFixed(TWO_PI, this.L, this.F));
     }
-
-    // --- MATH API ---
-    toBuffer(bigInts) {
-        const arr = new Uint32Array(bigInts.length * this.L);
-        bigInts.forEach((bn, i) => {
-            let n = bn;
-            for (let j = 0; j < this.L; j++) {
-                arr[i * this.L + j] = Number(n & 0xFFFFFFFFn);
-                n >>= 32n;
-            }
-        });
-        return arr;
-    }
-
-    fromBuffer(arr) {
-        const res = [];
-        for (let i = 0; i < arr.length / this.L; i++) {
-            let n = 0n;
-            for (let j = this.L - 1; j >= 0; j--) {
-                n = (n << 32n) | BigInt(arr[i * this.L + j]);
-            }
-            const msb = arr[i * this.L + this.L - 1] >>> 31;
-            if (msb) {
-                n = n - (1n << BigInt(this.L * 32));
-            }
-            res.push(n);
-        }
-        return res;
-    }
-
-    floatToBig(v) {
-        const S = BigInt(this.F * 32);
-        const val = BigInt(Math.round(v * Number(1n << 52n)));
-        const shift = S - 52n;
-        if (shift >= 0n) return val << shift;
-        return val >> (-shift);
-    }
-
-    bigToFloatStr(n) {
-        const S = BigInt(this.F * 32);
-        const scale = 1n << S;
-        let v = n;
-        let sign = "";
-        if (v < 0n) { sign = "-"; v = -v; }
-
-        const intPart = v / scale;
-        const fracPart = v % scale;
-        const d = (fracPart * (10n ** 10n)) / scale;
-        return `${sign}${intPart}.${d.toString().padStart(10, '0')}`;
-    }
-
-    hexToFixed(hex) { return this.toBuffer([BigInt("0x"+hex) << BigInt(this.F*32)]); }
 
     async runOp(op, listA, listB, listC = null, bufB_override = null) {
         const count = listA.length;
-        const bufA = this.createBuffer(this.toBuffer(listA));
-        const bufB = bufB_override ? bufB_override : (listB ? this.createBuffer(this.toBuffer(listB)) : this.createBuffer(new Uint32Array(this.L)));
-        const bufC = listC ? this.createBuffer(this.toBuffer(listC)) : this.createBuffer(new Uint32Array(this.L));
+        const bufA = this.createBuffer(math.toBuffer(listA, this.L));
+        const bufB = bufB_override ? bufB_override : (listB ? this.createBuffer(math.toBuffer(listB, this.L)) : this.createBuffer(new Uint32Array(this.L)));
+        const bufC = listC ? this.createBuffer(math.toBuffer(listC, this.L)) : this.createBuffer(new Uint32Array(this.L));
 
         const outSize = count * this.L * 4;
         const bufR = this.device.createBuffer({ size: outSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
         const bufRead = this.device.createBuffer({ size: outSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+
+        this.createComputePipeline(op);
 
         const bindGroup = this.device.createBindGroup({
             layout: this.pipelines[op].getBindGroupLayout(0),
@@ -125,7 +73,7 @@ export class GPUEngine {
         this.device.queue.submit([encoder.finish()]);
 
         await bufRead.mapAsync(GPUMapMode.READ);
-        const res = this.fromBuffer(new Uint32Array(bufRead.getMappedRange()));
+        const res = math.fromBuffer(new Uint32Array(bufRead.getMappedRange()), this.L);
         bufRead.unmap();
         return res;
     }
@@ -137,22 +85,34 @@ export class GPUEngine {
         return buf;
     }
 
-    // Helper wrappers
-    async add(a, b) { return this.runOp('add', a, b); }
-    async sub(a, b) { return this.runOp('sub', a, b); }
-    async mul(a, b) { return this.runOp('mul', a, b); }
-    async div(a, b) { return this.runOp('div', a, b); }
-    async sin(a) { return this.runOp('trig', a, null, [0n], this.constants.two_pi); }
-    async cos(a) { return this.runOp('trig', a, null, [1n], this.constants.two_pi); }
-
-
     // --- RENDER API ---
-    createRenderPipeline(format) {
+    createRenderPipeline(format, entryPointVS, entryPointFS) {
         return this.device.createRenderPipeline({
             layout: 'auto',
-            vertex: { module: this.shaderModule, entryPoint: 'vs_main' },
-            fragment: { module: this.shaderModule, entryPoint: 'fs_main', targets: [{ format }] },
+            vertex: {
+                module: this.shaderModule,
+                entryPoint: entryPointVS,
+                constants: {
+                    L: this.L,
+                    F: this.F,
+                }
+            },
+            fragment: {
+                module: this.shaderModule,
+                entryPoint: entryPointFS,
+                targets: [{ format }],
+                constants: {
+                    L: this.L,
+                    F: this.F,
+                }
+            },
             primitive: { topology: 'triangle-list' }
         });
     }
+
+    // --- MATH HELPERS ---
+    toBuffer(bigInts) { return math.toBuffer(bigInts, this.L); }
+    fromBuffer(arr) { return math.fromBuffer(arr, this.L); }
+    floatToBig(v) { return math.floatToBig(v, this.F); }
+    bigToFloatStr(n) { return math.bigToFloatStr(n, this.F); }
 }

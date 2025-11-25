@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate GPU Math & Fractal Engine</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div id="ui">
+        <h3>GPU Math & Fractal</h3>
+        <div>
+            <button id="btnReset">Reset View</button>
+            <button id="btnTests">Run Tests</button>
+        </div>
+        <div class="info-group">
+            <div id="fps">FPS: 0</div>
+            <div id="zoom">Zoom: 10^0</div>
+        </div>
+        <div class="info-group" id="coords">
+            <span class="coord-label">Center X:</span> <span id="cx">0</span>
+            <span class="coord-label">Center Y:</span> <span id="cy">0</span>
+        </div>
+        <div id="log"></div>
+    </div>
+    <canvas id="gpuCanvas"></canvas>
+    <script src="js/main.js" type="module"></script>
+</body>
+</html>

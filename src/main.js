@@ -1,32 +1,29 @@
 import { GPUEngine } from './gpu-engine.js';
 import { GPUOperations } from './gpu-operations.js';
+import { UI } from './ui.js';
+import { InputHandler } from './input.js';
 
 class App {
     constructor() {
         this.canvas = document.getElementById('gpuCanvas');
         this.context = this.canvas.getContext('webgpu');
-        this.logDiv = document.getElementById('log');
 
         this.engine = new GPUEngine(64, 32); // L=64, F=32
         this.math = new GPUOperations(this.engine);
+        this.ui = new UI(this);
+        this.input = new InputHandler(this);
+
         this.camera = {
             x: 0n,
             y: 0n,
-            scale: this.engine.floatToBig(4.0 / 800.0),
+            scale: 0n, // Initialized in resetView
             resolution: new Float32Array([this.canvas.width, this.canvas.height])
         };
-
-        this.ui = {
-            cx: document.getElementById('cx'),
-            cy: document.getElementById('cy'),
-            zoom: document.getElementById('zoom'),
-            fps: document.getElementById('fps')
-        };
+        this.resetView();
     }
 
     log(msg) {
-        this.logDiv.innerText += `> ${msg}\n`;
-        this.logDiv.scrollTop = this.logDiv.scrollHeight;
+        this.ui.log(msg);
     }
 
     async init() {
@@ -36,13 +33,13 @@ class App {
             this.log("GPU Engine Ready.");
         } catch (e) {
             this.log("Error: " + e.message);
+            console.error(e);
             return;
         }
 
         this.setupCanvas();
-        this.setupUI();
-        this.setupInputHandlers();
         this.createUBO();
+        this.resize();
 
         requestAnimationFrame(this.render.bind(this));
     }
@@ -53,39 +50,10 @@ class App {
         this.renderPipeline = this.engine.createRenderPipeline(format, 'vs_main', 'fs_main');
     }
 
-    setupUI() {
-        document.getElementById('btnReset').onclick = () => {
-            this.camera.x = 0n;
-            this.camera.y = 0n;
-            this.camera.scale = this.engine.floatToBig(4.0 / 800.0);
-        };
-        document.getElementById('btnTests').onclick = () => this.runTests();
-    }
-
-    setupInputHandlers() {
-        let isDragging = false;
-        let lastMouse = { x: 0, y: 0 };
-
-        this.canvas.addEventListener('mousedown', e => {
-            isDragging = true;
-            lastMouse = { x: e.clientX, y: e.clientY };
-        });
-        window.addEventListener('mouseup', () => { isDragging = false; });
-        this.canvas.addEventListener('mousemove', e => {
-            if (!isDragging) return;
-            const dx = e.clientX - lastMouse.x;
-            const dy = e.clientY - lastMouse.y;
-            lastMouse = { x: e.clientX, y: e.clientY };
-            this.camera.x += BigInt(-dx) * this.camera.scale;
-            this.camera.y += BigInt(-dy) * this.camera.scale;
-        });
-        this.canvas.addEventListener('wheel', e => {
-            e.preventDefault();
-            this.camera.scale *= (e.deltaY < 0) ? 10n / 11n : 11n / 10n;
-        }, { passive: false });
-
-        window.addEventListener('resize', () => this.resize());
-        this.resize();
+    resetView() {
+        this.camera.x = 0n;
+        this.camera.y = 0n;
+        this.camera.scale = this.engine.floatToBig(4.0 / this.canvas.width);
     }
 
     resize() {
@@ -93,8 +61,11 @@ class App {
         this.canvas.height = window.innerHeight;
         this.camera.resolution[0] = this.canvas.width;
         this.camera.resolution[1] = this.canvas.height;
-        const format = navigator.gpu.getPreferredCanvasFormat();
-        this.context.configure({ device: this.engine.device, format });
+
+        if (this.engine.device) {
+            const format = navigator.gpu.getPreferredCanvasFormat();
+            this.context.configure({ device: this.engine.device, format });
+        }
     }
 
     createUBO() {
@@ -106,7 +77,10 @@ class App {
         this.uboData = new Uint8Array(UBO_SIZE);
         this.bindGroup = this.engine.device.createBindGroup({
             layout: this.renderPipeline.getBindGroupLayout(0),
-            entries: [{ binding: 0, resource: { buffer: this.uniformBuffer } }]
+            entries: [
+                { binding: 0, resource: { buffer: this.uniformBuffer } },
+                { binding: 4, resource: { buffer: this.engine.configBuffer } }
+            ]
         });
     }
 
@@ -116,10 +90,7 @@ class App {
         this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.scale]).buffer), 512);
         new Float32Array(this.uboData.buffer, 768, 2).set(this.camera.resolution);
         this.engine.device.queue.writeBuffer(this.uniformBuffer, 0, this.uboData);
-
-        this.ui.cx.innerText = this.engine.bigToFloatStr(this.camera.x);
-        this.ui.cy.innerText = this.engine.bigToFloatStr(this.camera.y);
-        this.ui.zoom.innerText = "Scale: " + this.engine.bigToFloatStr(this.camera.scale);
+        this.ui.updateCameraInfo();
     }
 
     render(time) {
@@ -148,7 +119,7 @@ class App {
         if (!this.frameCount) this.frameCount = 0;
         this.frameCount++;
         if (time - this.lastFpsTime > 1000) {
-            this.ui.fps.innerText = `FPS: ${this.frameCount}`;
+            this.ui.updateFPS(this.frameCount);
             this.frameCount = 0;
             this.lastFpsTime = time;
         }

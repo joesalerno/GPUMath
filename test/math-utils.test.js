@@ -8,7 +8,7 @@ describe('Math Utilities', () => {
     it('should convert a positive float to a BigInt and back', () => {
         const big = math.floatToBig(1.5, F);
         const str = math.bigToFloatStr(big, F);
-        expect(str).toBe("1.5000000000");
+        expect(str).toBe("1.5");
     });
 
     it('should convert a negative float to a BigInt and back', () => {

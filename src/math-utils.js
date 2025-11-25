@@ -37,14 +37,23 @@ export function floatToBig(v, F) {
 export function bigToFloatStr(n, F) {
     const S = BigInt(F * 32);
     const scale = 1n << S;
-    let v = n;
     let sign = "";
-    if (v < 0n) { sign = "-"; v = -v; }
+    if (n < 0n) {
+        sign = "-";
+        n = -n;
+    }
 
-    const intPart = v / scale;
-    const fracPart = v % scale;
-    const d = (fracPart * (10n ** 10n)) / scale;
-    return `${sign}${intPart}.${d.toString().padStart(10, '0')}`;
+    const intPart = n / scale;
+    const fracPart = n % scale;
+
+    // Calculate fractional part with high precision
+    const precision = 30; // Number of decimal places
+    const factor = 10n ** BigInt(precision);
+    const scaledFrac = (fracPart * factor) / scale;
+
+    const fracStr = scaledFrac.toString().padStart(precision, '0').replace(/0+$/, '');
+
+    return `${sign}${intPart}.${fracStr || '0'}`;
 }
 
 export function hexToFixed(hex, L, F) {

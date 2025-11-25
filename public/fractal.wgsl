@@ -5,11 +5,11 @@ const F: u32 = 32u;
 struct Config {
     L: u32,
     F: u32,
-}
+};
 @group(0) @binding(4) var<uniform> config: Config;
 
-struct LargeInt { limbs: array<u32, L> }
-struct Data { values: array<LargeInt> }
+struct LargeInt { limbs: array<u32, L>, };
+struct Data { values: array<LargeInt>, };
 
 // For Compute Shaders
 @group(0) @binding(0) var<storage, read> bufA : Data;
@@ -24,8 +24,8 @@ struct Camera {
     centerX: LargeInt,
     centerY: LargeInt,
     scale: LargeInt, // Scale per pixel
-    resolution: vec2<f32>
-}
+    resolution: vec2<f32>,
+};
 @group(0) @binding(0) var<storage, read> cam : Camera;
 
 // --- CORE MATH (BRANCHLESS & OPTIMIZED) ---
@@ -110,9 +110,9 @@ fn div_scalar(a: ptr<function, LargeInt>, b: u32) {
     for(var k=0u; k<config.L; k++){
         let i=config.L-1u-k;
         let v=(*a).limbs[i];
-        let f=f64(r)*4294967296.0+f64(v);
-        (*a).limbs[i]=u32(f/f64(b));
-        r=u32(f%f64(b));
+        let f=f32(r)*4294967296.0+f32(v);
+        (*a).limbs[i]=u32(f/f32(b));
+        r=u32(f%f32(b));
     }
 }
 
@@ -335,8 +335,8 @@ fn op_trig(@builtin(global_invocation_id) id: vec3<u32>) {
 // to run on every pixel of the canvas.
 struct VertexOutput {
     @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>
-}
+    @location(0) uv: vec2<f32>,
+};
 
 @vertex
 fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
@@ -351,11 +351,11 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(inp: VertexOutput) -> @location(0) vec4<f32> {
     // Coordinate Calculation: Center + (PixelOffset * Scale)
 
     let ar = cam.resolution.x / cam.resolution.y;
-    let uv = in.uv;
+    let uv = inp.uv;
 
     // Screen coords: x: -W/2 to W/2.
     let px = i32(uv.x * (cam.resolution.x * 0.5));

@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultimate GPU Math & Fractal Engine</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #111; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        canvas { display: block; width: 100%; height: 100vh; touch-action: none; }
+        #ui {
+            position: absolute; top: 10px; left: 10px;
+            background: rgba(10, 10, 15, 0.9);
+            padding: 15px; border-radius: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            max-width: 350px;
+            border: 1px solid #333;
+        }
+        h3 { margin: 0 0 10px 0; color: #00d2ff; font-weight: 300; letter-spacing: 1px; }
+        button {
+            cursor: pointer; padding: 6px 12px; margin-right: 5px; margin-bottom: 5px;
+            background: #2a2a35; color: #fff; border: 1px solid #444; border-radius: 4px;
+            transition: all 0.2s;
+        }
+        button:hover { background: #444; border-color: #00d2ff; }
+        .info-group { margin-top: 10px; font-size: 12px; color: #aaa; font-family: monospace; }
+        #coords { word-break: break-all; max-height: 150px; overflow-y: auto; }
+        .coord-label { color: #666; display: block; margin-top: 4px; }
+        #log { margin-top: 10px; font-size: 11px; color: #888; max-height: 100px; overflow-y: auto; border-top: 1px solid #333; padding-top: 5px; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <h3>GPU Math & Fractal</h3>
+        <div>
+            <button id="btnReset">Reset View</button>
+            <button id="btnTests">Run Tests</button>
+        </div>
+        <div class="info-group">
+            <div id="fps">FPS: 0</div>
+            <div id="zoom">Zoom: 10^0</div>
+        </div>
+        <div class="info-group" id="coords">
+            <span class="coord-label">Center X:</span> <span id="cx">0</span>
+            <span class="coord-label">Center Y:</span> <span id="cy">0</span>
+        </div>
+        <div id="log"></div>
+    </div>
+    <canvas id="gpuCanvas"></canvas>
+
+    <script>
+/*
+ * ULTIMATE GPU MATH LIBRARY & FRACTAL ENGINE
+ *
+ * Features:
+ * - 2048-bit Arbitrary Precision Math on GPU (WebGPU)
+ * - Compute Shader Arithmetic (Add, Sub, Mul, Div, Sqrt, Trig, Exp, ModPow)
+ * - Fragment Shader Fractal Rendering (Mandelbrot)
+ * - Dynamic Signed BigNum Logic
+ * - Interactive Deep Zoom
+ */
+
+// --- CONFIGURATION ---
+const L = 64; // Limbs (64 * 32 = 2048 bits)
+const F = 32; // Fractional Limbs (1024 bits)
+
+// --- WGSL SHADER GENERATOR ---
+const ShaderLib = (L, F) => `
+    override L: u32 = ${L}u;
+    override F: u32 = ${F}u;
+
+    struct BigInt { limbs: array<u32, L> }
+    struct Data { values: array<BigInt> }
+
+    // For Compute Shaders
+    @group(0) @binding(0) var<storage, read> bufA : Data;
+    @group(0) @binding(1) var<storage, read> bufB : Data;
+    @group(0) @binding(2) var<storage, read_write> bufR : Data;
+    @group(0) @binding(3) var<storage, read> bufC : Data; // Constants or Aux
+
+    // For Fragment Shader (Uniforms)
+    struct Camera {
+        centerX: BigInt,
+        centerY: BigInt,
+        scale: BigInt, // Scale per pixel
+        resolution: vec2<f32>
+    }
+    @group(0) @binding(0) var<storage, read> cam : Camera;
+
+    // --- CORE MATH (BRANCHLESS & OPTIMIZED) ---
+
+    // 32x32 -> 64-bit Multiply-Accumulate
+    fn mac(a: u32, b: u32, c: u32, carry: u32) -> vec2<u32> {
+        let la=a&0xFFFFu; let ha=a>>16u; let lb=b&0xFFFFu; let hi_b=b>>16u;
+        let p0=la*lb; let p1=la*hi_b; let p2=ha*lb; let p3=ha*hi_b;
+        let t=p1+(p0>>16u);
+        var lo=((t<<16u)|(p0&0xFFFFu)); var hi=p3+(t>>16u)+(p2>>16u);
+        let t2=lo+(p2<<16u); if(t2<lo){hi++;} lo=t2;
+        let t3=lo+c; if(t3<lo){hi++;} lo=t3;
+        let t4=lo+carry; if(t4<lo){hi++;} lo=t4;
+        return vec2<u32>(lo, hi);
+    }
+
+    // Add (In-Place): A += B
+    fn add(a: ptr<function, BigInt>, b: BigInt) {
+        var c=0u;
+        for(var i=0u; i<L; i++){
+            let v=(*a).limbs[i];
+            let s=v+b.limbs[i]+c;
+            c=u32(s<v||(c==1u&&s==v));
+            (*a).limbs[i]=s;
+        }
+    }
+
+    // Sub (In-Place): A -= B
+    fn sub(a: ptr<function, BigInt>, b: BigInt) {
+        var r=0u;
+        for(var i=0u; i<L; i++){
+            let v=(*a).limbs[i];
+            let o=b.limbs[i];
+            let d=v-o-r;
+            r=u32(v<o)|(u32(v==o)&r);
+            (*a).limbs[i]=d;
+        }
+    }
+
+    // Negate (Two's Complement): A = -A
+    fn neg(a: ptr<function, BigInt>) {
+        var c=1u;
+        for(var i=0u; i<L; i++) {
+            let v = ~(*a).limbs[i];
+            let s = v + c;
+            if (s < v) { c = 1u; } else { c = 0u; }
+            if (s == 0u && v == 0xFFFFFFFFu) { c = 1u; }
+            (*a).limbs[i] = s;
+        }
+    }
+
+    // Check if Negative (MSB set)
+    fn is_neg(a: BigInt) -> bool {
+        return (a.limbs[L-1u] >> 31u) == 1u;
+    }
+
+    // Shift Left: A <<= 1
+    fn shl1(a: ptr<function, BigInt>) {
+        var c=0u;
+        for(var i=0u; i<L; i++){
+            let v=(*a).limbs[i];
+            let n=(v<<1u)|c;
+            c=v>>31u;
+            (*a).limbs[i]=n;
+        }
+    }
+
+    // Greater Than or Equal (Unsigned)
+    fn gte(a: ptr<function, BigInt>, b: BigInt) -> bool {
+        for(var k=0u; k<L; k++) {
+            let i=L-1u-k;
+            if((*a).limbs[i]>b.limbs[i]){return true;}
+            if((*a).limbs[i]<b.limbs[i]){return false;}
+        }
+        return true;
+    }
+
+    // Scalar Div: A /= scalar (O(N))
+    fn div_scalar(a: ptr<function, BigInt>, b: u32) {
+        var r=0u;
+        for(var k=0u; k<L; k++){
+            let i=L-1u-k;
+            let v=(*a).limbs[i];
+            let f=f64(r)*4294967296.0+f64(v);
+            (*a).limbs[i]=u32(f/f64(b));
+            r=u32(f%f64(b));
+        }
+    }
+
+    // Multiply (Unsigned Fixed Point): Returns (A * B) >> F
+    fn mul_fixed_op_unsigned(a: BigInt, b: BigInt) -> BigInt {
+        var t: array<u32, L*2>; // Temporary double width
+        // Simple O(N^2) Schoolbook
+        for(var i=0u; i<L; i++){
+            var c=0u;
+            for(var j=0u; j<L; j++){
+                let r=mac(a.limbs[i], b.limbs[j], t[i+j], c);
+                t[i+j]=r.x;
+                c=r.y;
+            }
+            t[i+L]=c;
+        }
+        var res:BigInt;
+        // Extract middle part (Fixed Point result)
+        for(var i=0u; i<L; i++){ res.limbs[i]=t[i+F]; }
+        return res;
+    }
+
+    // Multiply (Integer): Returns (A * B) (Low L limbs)
+    fn mul_int_op(a: BigInt, b: BigInt) -> BigInt {
+        var res:BigInt; for(var k=0u;k<L;k++){res.limbs[k]=0u;}
+        for(var i=0u;i<L;i++){ var c=0u; for(var j=0u;j<L;j++){ if(i+j<L){ let r=mac(a.limbs[i],b.limbs[j],res.limbs[i+j],c); res.limbs[i+j]=r.x; c=r.y; } } }
+        return res;
+    }
+
+    // Signed Fixed Point Multiply
+    fn mul_fixed(a: BigInt, b: BigInt) -> BigInt {
+        var va = a; var vb = b;
+        let sa = is_neg(va);
+        let sb = is_neg(vb);
+        if(sa) { neg(&va); }
+        if(sb) { neg(&vb); }
+
+        var res = mul_fixed_op_unsigned(va, vb);
+
+        if (sa != sb) { neg(&res); }
+        return res;
+    }
+
+    // Signed Fixed Point Square (Optimization potential, but mapped to mul for now)
+    fn sqr_fixed(a: BigInt) -> BigInt {
+        return mul_fixed(a, a);
+    }
+
+    // Int32 to BigInt (Signed)
+    fn int_to_big(v: i32) -> BigInt {
+        var res: BigInt;
+        let u = u32(v);
+        res.limbs[0] = u;
+        var fill = 0u;
+        if (v < 0) { fill = 0xFFFFFFFFu; }
+        for(var i=1u; i<L; i++) { res.limbs[i] = fill; }
+        return res;
+    }
+
+    // --- COMPUTE SHADER OPS ---
+
+    @compute @workgroup_size(64)
+    fn op_add(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        var r=bufA.values[i]; add(&r, bufB.values[i]); bufR.values[i]=r;
+    }
+    @compute @workgroup_size(64)
+    fn op_sub(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        var r=bufA.values[i]; sub(&r, bufB.values[i]); bufR.values[i]=r;
+    }
+    @compute @workgroup_size(64)
+    fn op_mul(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        bufR.values[i] = mul_fixed(bufA.values[i], bufB.values[i]);
+    }
+    @compute @workgroup_size(64)
+    fn op_mul_int(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        bufR.values[i] = mul_int_op(bufA.values[i], bufB.values[i]);
+    }
+    @compute @workgroup_size(64)
+    fn op_div(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        // Binary Restoring Division (Fixed Point Logic)
+        var rem:BigInt; var quo:BigInt;
+        let total = (L + F) * 32u;
+        let B = bufB.values[i];
+
+        for(var k=0u; k<total; k++) {
+            let virt_idx = total - 1u - k;
+            var bit = 0u;
+            if(virt_idx >= F*32u) {
+                let r_idx = virt_idx - F*32u;
+                if(r_idx < L*32u) { bit = (bufA.values[i].limbs[r_idx/32u] >> (r_idx%32u)) & 1u; }
+            }
+            shl1(&rem); rem.limbs[0] |= bit;
+            var gte_b = gte(&rem, B);
+            shl1(&quo);
+            if(gte_b) { sub(&rem, B); quo.limbs[0] |= 1u; }
+        }
+        bufR.values[i] = quo;
+    }
+    @compute @workgroup_size(64)
+    fn op_mod(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        var rem:BigInt; let B = bufB.values[i];
+        for(var k=0u; k<L*32u; k++) {
+            let idx = L*32u - 1u - k;
+            let bit = (bufA.values[i].limbs[idx/32u] >> (idx%32u)) & 1u;
+            shl1(&rem); rem.limbs[0] |= bit;
+            if(gte(&rem, B)) { sub(&rem, B); }
+        }
+        bufR.values[i] = rem;
+    }
+    @compute @workgroup_size(64)
+    fn op_sqrt(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        var rem:BigInt; var root:BigInt;
+        for(var k=0u; k<L*16u; k++) {
+            let pair = (L*16u) - 1u - k;
+            let glob_bit = pair * 2u;
+            let val = (bufA.values[i].limbs[glob_bit/32u] >> (glob_bit%32u)) & 3u;
+            shl1(&root);
+            // rem = (rem << 2) | val
+            var c=0u; for(var z=0u;z<L;z++){let v=rem.limbs[z];let n=(v<<2u)|c;c=v>>30u;rem.limbs[z]=n;}
+            rem.limbs[0] |= val;
+            var cand = root; cand.limbs[0] |= 1u;
+            if(gte(&rem, cand)) { sub(&rem, cand); root.limbs[0] |= 2u; }
+        }
+        bufR.values[i] = root;
+    }
+    @compute @workgroup_size(64)
+    fn op_exp(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        let x = bufA.values[i];
+        var term = x;
+        var sum: BigInt; sum.limbs[F] = 1u; add(&sum, x);
+        for(var k=2u; k<30u; k++) {
+            term = mul_fixed_op_unsigned(term, x); // Assume positive x for simplicity or handle sign
+            div_scalar(&term, k);
+            add(&sum, term);
+            var is_0=true; for(var z=0u;z<L;z++){if(term.limbs[z]!=0u){is_0=false;break;}} if(is_0){break;}
+        }
+        bufR.values[i] = sum;
+    }
+    @compute @workgroup_size(64)
+    fn op_modpow(@builtin(global_invocation_id) id: vec3<u32>) {
+        let idx = id.x; if(idx >= arrayLength(&bufA.values)){return;}
+        var base = bufA.values[idx];
+        let exp  = bufB.values[idx];
+        let mod_val  = bufC.values[idx];
+        var res: BigInt; res.limbs[0] = 1u;
+
+        for (var k=0u; k<L*32u; k++) {
+            if (((exp.limbs[k/32u] >> (k%32u)) & 1u) == 1u) {
+                var p = mul_int_op(res, base);
+                // Inline Mod
+                var rem:BigInt;
+                for(var b=0u; b<L*32u; b++) {
+                    let bi = L*32u - 1u - b;
+                    let bit = (p.limbs[bi/32u] >> (bi%32u)) & 1u;
+                    shl1(&rem); rem.limbs[0] |= bit;
+                    if(gte(&rem, mod_val)) { sub(&rem, mod_val); }
+                }
+                res = rem;
+            }
+            var p2 = mul_int_op(base, base);
+            var rem2:BigInt;
+            for(var b=0u; b<L*32u; b++) {
+                let bi = L*32u - 1u - b;
+                let bit = (p2.limbs[bi/32u] >> (bi%32u)) & 1u;
+                shl1(&rem2); rem2.limbs[0] |= bit;
+                if(gte(&rem2, mod_val)) { sub(&rem2, mod_val); }
+            }
+            base = rem2;
+        }
+        bufR.values[idx] = res;
+    }
+    @compute @workgroup_size(64)
+    fn op_trig(@builtin(global_invocation_id) id: vec3<u32>) {
+        let i=id.x; if(i>=arrayLength(&bufA.values)){return;}
+        let is_cos = (bufC.values[0].limbs[0] == 1u);
+        // 1. Argument Reduction (Mod 2PI)
+        var x = bufA.values[i];
+        let two_pi = bufB.values[0];
+        var rem:BigInt;
+        for(var k=0u; k<L*32u; k++) {
+           let idx = L*32u - 1u - k;
+           let bit = (x.limbs[idx/32u] >> (idx%32u)) & 1u;
+           shl1(&rem); rem.limbs[0] |= bit;
+           if(gte(&rem, two_pi)) { sub(&rem, two_pi); }
+        }
+        x = rem;
+        // 2. Taylor Series
+        let x_sq = mul_fixed_op_unsigned(x, x);
+        var term = x;
+        var sum = x;
+        if (is_cos) { for(var z=0u;z<L;z++){term.limbs[z]=0u;} term.limbs[F]=1u; sum=term; }
+        for(var iter=1u; iter<=22u; iter++) {
+          term = mul_fixed_op_unsigned(term, x_sq);
+          let k = iter * 2u;
+          var d = k*(k+1u); if(is_cos){ d=(k-1u)*k; }
+          div_scalar(&term, d);
+          if(iter%2u==1u){ sub(&sum, term); } else { add(&sum, term); }
+        }
+        bufR.values[i] = sum;
+    }
+
+    // --- FRACTAL RENDERING (FRAGMENT SHADER) ---
+
+    struct VertexOutput {
+        @builtin(position) pos: vec4<f32>,
+        @location(0) uv: vec2<f32>
+    }
+
+    @vertex
+    fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
+        var pos = array<vec2<f32>, 6>(
+            vec2(-1.0, -1.0), vec2(1.0, -1.0), vec2(-1.0, 1.0),
+            vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0)
+        );
+        var out: VertexOutput;
+        out.pos = vec4(pos[idx], 0.0, 1.0);
+        out.uv = pos[idx]; // -1.0 to 1.0
+        return out;
+    }
+
+    @fragment
+    fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+        // Coordinate Calculation: Center + (PixelOffset * Scale)
+
+        let ar = cam.resolution.x / cam.resolution.y;
+        let uv = in.uv;
+
+        // Screen coords: x: -W/2 to W/2.
+        let px = i32(uv.x * (cam.resolution.x * 0.5));
+        let py = i32(uv.y * (cam.resolution.y * 0.5));
+
+        var offX = int_to_big(px);
+        var offY = int_to_big(py);
+
+        // Scale is always positive.
+        var dx = mul_fixed(offX, cam.scale);
+        var dy = mul_fixed(offY, cam.scale);
+
+        // C = Center + Delta
+        var cx = cam.centerX; add(&cx, dx);
+        var cy = cam.centerY; add(&cy, dy);
+
+        // Mandelbrot Iteration
+        // Z = 0
+        var zx: BigInt; // 0
+        var zy: BigInt; // 0
+        var zx2: BigInt;
+        var zy2: BigInt;
+
+        var iter = 0u;
+        let MAX = 255u;
+
+        for (var i=0u; i<MAX; i++) {
+            zx2 = sqr_fixed(zx);
+            zy2 = sqr_fixed(zy);
+
+            // Escape: zx2 + zy2 > 4
+            var mag = zx2; add(&mag, zy2);
+            if (mag.limbs[F] >= 4u) { break; }
+
+            // zy = 2*zx*zy + cy
+            var next_zy = mul_fixed(zx, zy);
+            shl1(&next_zy);
+            add(&next_zy, cy);
+
+            // zx = zx2 - zy2 + cx
+            var next_zx = zx2;
+            sub(&next_zx, zy2);
+            add(&next_zx, cx);
+
+            zx = next_zx;
+            zy = next_zy;
+            iter = i;
+        }
+
+        // Coloring
+        let t = f32(iter) / f32(MAX);
+        if (iter == MAX) { return vec4(0.0, 0.0, 0.0, 1.0); }
+
+        // Palette
+        let r = 0.5 + 0.5*cos(3.0 + t*10.0 + 0.0);
+        let g = 0.5 + 0.5*cos(3.0 + t*10.0 + 0.6);
+        let b = 0.5 + 0.5*cos(3.0 + t*10.0 + 1.0);
+
+        return vec4(r, g, b, 1.0);
+    }
+`;
+
+// --- GPU ENGINE CLASS ---
+class GPUEngine {
+    constructor() {
+        this.device = null;
+        this.L = L;
+        this.F = F;
+        this.pipelines = {};
+        this.constants = {};
+    }
+
+    async init() {
+        if (!navigator.gpu) throw new Error("WebGPU not supported");
+        const adapter = await navigator.gpu.requestAdapter();
+        this.device = await adapter.requestDevice();
+
+        this.shaderModule = this.device.createShaderModule({ code: ShaderLib(this.L, this.F) });
+
+        // Create Compute Pipelines
+        const ops = ['add', 'sub', 'mul', 'mul_int', 'div', 'mod', 'sqrt', 'exp', 'modpow', 'trig'];
+        ops.forEach(op => {
+            this.pipelines[op] = this.device.createComputePipeline({
+                layout: 'auto',
+                compute: { module: this.shaderModule, entryPoint: `op_${op}` }
+            });
+        });
+
+        // Constants for Trig
+        const TWO_PI = "6487ED5110B4611A62633145C06E0E68948127044533E63A0105DF531D89CD9128A57F477590822765A1523B06C758169135064731F29C35C7433877995643640F11C89874136C055F60B84D2B196C27F0922872A437C0994C3817F723223126848A183D5D7716944B8411D44686475C62281D6F2C33D14D89CD0627721535451D00B026859752D5D00B89C6D39E837D8D6228076635292415516053748259463991C6E6A2689240361245787680D311E6A1221430F7C2037953258A3668393526E3082989D22784566270E03C1A32766397FC30846503715C6C075D1C689849E94D414619379685954B469950796865074E182522770248430541E1837F359051680186591295320076214C236E0D2C76A288E8367F7D21E428C6466986693892801F41B68F807466540673059695655513A4997096696C7540D3708D64C7203780D774653697968525049964585354972410";
+        this.constants.two_pi = this.createBuffer(this.hexToFixed(TWO_PI));
+
+        console.log("GPU Engine Initialized");
+    }
+
+    // --- MATH API ---
+    toBuffer(bigInts) {
+        const arr = new Uint32Array(bigInts.length * this.L);
+        bigInts.forEach((bn, i) => {
+            let n = bn;
+            for (let j = 0; j < this.L; j++) {
+                arr[i * this.L + j] = Number(n & 0xFFFFFFFFn);
+                n >>= 32n;
+            }
+        });
+        return arr;
+    }
+
+    fromBuffer(arr) {
+        const res = [];
+        for (let i = 0; i < arr.length / this.L; i++) {
+            let n = 0n;
+            for (let j = this.L - 1; j >= 0; j--) {
+                n = (n << 32n) | BigInt(arr[i * this.L + j]);
+            }
+            const msb = arr[i * this.L + this.L - 1] >>> 31;
+            if (msb) {
+                n = n - (1n << BigInt(this.L * 32));
+            }
+            res.push(n);
+        }
+        return res;
+    }
+
+    floatToBig(v) {
+        const S = BigInt(this.F * 32);
+        const val = BigInt(Math.round(v * Number(1n << 52n)));
+        const shift = S - 52n;
+        if (shift >= 0n) return val << shift;
+        return val >> (-shift);
+    }
+
+    bigToFloatStr(n) {
+        const S = BigInt(this.F * 32);
+        const scale = 1n << S;
+        let v = n;
+        let sign = "";
+        if (v < 0n) { sign = "-"; v = -v; }
+
+        const intPart = v / scale;
+        const fracPart = v % scale;
+        const d = (fracPart * (10n ** 10n)) / scale;
+        return `${sign}${intPart}.${d.toString().padStart(10, '0')}`;
+    }
+
+    hexToFixed(hex) { return this.toBuffer([BigInt("0x"+hex) << BigInt(this.F*32)]); }
+
+    async runOp(op, listA, listB, listC = null, bufB_Override=null, bufC_Override=null) {
+        const count = listA.length;
+        const bufA = this.createBuffer(this.toBuffer(listA));
+
+        let bufB = bufB_Override;
+        if (!bufB) {
+            if (listB) bufB = this.createBuffer(this.toBuffer(listB));
+            else bufB = this.createBuffer(new Uint32Array(64));
+        }
+
+        let bufC = bufC_Override;
+        if (!bufC) {
+            if (listC) bufC = this.createBuffer(this.toBuffer(listC));
+            else bufC = this.createBuffer(new Uint32Array(64));
+        }
+
+        const outSize = count * this.L * 4;
+        const bufR = this.device.createBuffer({ size: outSize, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        const bufRead = this.device.createBuffer({ size: outSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+
+        const bindGroup = this.device.createBindGroup({
+            layout: this.pipelines[op].getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: { buffer: bufA } },
+                { binding: 1, resource: { buffer: bufB } },
+                { binding: 2, resource: { buffer: bufR } },
+                { binding: 3, resource: { buffer: bufC } }
+            ]
+        });
+
+        const encoder = this.device.createCommandEncoder();
+        const pass = encoder.beginComputePass();
+        pass.setPipeline(this.pipelines[op]);
+        pass.setBindGroup(0, bindGroup);
+        pass.dispatchWorkgroups(Math.ceil(count / 64));
+        pass.end();
+        encoder.copyBufferToBuffer(bufR, 0, bufRead, 0, outSize);
+        this.device.queue.submit([encoder.finish()]);
+
+        await bufRead.mapAsync(GPUMapMode.READ);
+        const res = this.fromBuffer(new Uint32Array(bufRead.getMappedRange()));
+        bufRead.unmap();
+        return res;
+    }
+
+    createBuffer(data) {
+        const buf = this.device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
+        new Uint32Array(buf.getMappedRange()).set(data);
+        buf.unmap();
+        return buf;
+    }
+
+    // Helper wrappers
+    async sin(a) { return this.runOp('trig', a, null, null, this.constants.two_pi, this.createBuffer(new Uint32Array(64).fill(0))); }
+    async cos(a) { return this.runOp('trig', a, null, null, this.constants.two_pi, this.createBuffer(new Uint32Array(64).fill(1))); }
+
+    // --- RENDER API ---
+    createRenderPipeline(format) {
+        return this.device.createRenderPipeline({
+            layout: 'auto',
+            vertex: { module: this.shaderModule, entryPoint: 'vs_main' },
+            fragment: { module: this.shaderModule, entryPoint: 'fs_main', targets: [{ format }] },
+            primitive: { topology: 'triangle-list' }
+        });
+    }
+}
+
+// --- APPLICATION LOGIC ---
+(async () => {
+    const canvas = document.getElementById('gpuCanvas');
+    const context = canvas.getContext('webgpu');
+    const logDiv = document.getElementById('log');
+    const log = (msg) => { logDiv.innerText += `> ${msg}\n`; logDiv.scrollTop = logDiv.scrollHeight; };
+
+    const engine = new GPUEngine();
+    try {
+        await engine.init();
+        log("GPU Engine Ready.");
+    } catch (e) {
+        log("Error: " + e.message);
+        return;
+    }
+
+    // Setup Canvas Format
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    context.configure({ device: engine.device, format });
+    const renderPipeline = engine.createRenderPipeline(format);
+
+    // Camera State
+    const camera = {
+        x: 0n, // BigInt (Fixed Point)
+        y: 0n,
+        scale: engine.floatToBig(4.0 / 800.0), // Start showing ~4 units wide.
+        resolution: new Float32Array([canvas.width, canvas.height])
+    };
+
+    // UI References
+    const ui = {
+        cx: document.getElementById('cx'),
+        cy: document.getElementById('cy'),
+        zoom: document.getElementById('zoom'),
+        fps: document.getElementById('fps')
+    };
+
+    // Input Handling
+    let isDragging = false;
+    let lastMouse = { x: 0, y: 0 };
+
+    canvas.addEventListener('mousedown', e => { isDragging = true; lastMouse = { x: e.clientX, y: e.clientY }; });
+    window.addEventListener('mouseup', () => isDragging = false);
+
+    canvas.addEventListener('mousemove', e => {
+        if (!isDragging) return;
+        const dx = e.clientX - lastMouse.x;
+        const dy = e.clientY - lastMouse.y;
+        lastMouse = { x: e.clientX, y: e.clientY };
+
+        const bigDx = BigInt(-dx) * camera.scale;
+        const bigDy = BigInt(-dy) * camera.scale;
+
+        camera.x += bigDx;
+        camera.y += bigDy;
+    });
+
+    canvas.addEventListener('wheel', e => {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+            camera.scale = camera.scale * 10n / 11n; // Zoom In
+        } else {
+            camera.scale = camera.scale * 11n / 10n; // Zoom Out
+        }
+    }, { passive: false });
+
+    // Resize
+    const resize = () => {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        camera.resolution[0] = canvas.width;
+        camera.resolution[1] = canvas.height;
+        context.configure({ device: engine.device, format });
+    };
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Uniform Buffer
+    const UBO_SIZE = 256 + 256 + 256 + 16;
+    const uniformBuffer = engine.device.createBuffer({ size: UBO_SIZE, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const uboData = new Uint8Array(UBO_SIZE);
+
+    const updateUBO = () => {
+        const bx = new Uint32Array(engine.toBuffer([camera.x]).buffer);
+        const by = new Uint32Array(engine.toBuffer([camera.y]).buffer);
+        const bs = new Uint32Array(engine.toBuffer([camera.scale]).buffer);
+
+        uboData.set(new Uint8Array(bx.buffer), 0);
+        uboData.set(new Uint8Array(by.buffer), 256);
+        uboData.set(new Uint8Array(bs.buffer), 512);
+
+        new Float32Array(uboData.buffer, 768, 2).set(camera.resolution);
+
+        engine.device.queue.writeBuffer(uniformBuffer, 0, uboData);
+
+        ui.cx.innerText = engine.bigToFloatStr(camera.x);
+        ui.cy.innerText = engine.bigToFloatStr(camera.y);
+        ui.zoom.innerText = "Scale: " + engine.bigToFloatStr(camera.scale);
+    };
+
+    // Bind Group
+    const bindGroup = engine.device.createBindGroup({
+        layout: renderPipeline.getBindGroupLayout(0),
+        entries: [{ binding: 0, resource: { buffer: uniformBuffer } }]
+    });
+
+    // Render Loop
+    let lastTime = 0;
+    let frameCount = 0;
+    let lastFpsTime = 0;
+
+    const render = (time) => {
+        const dt = time - lastTime;
+        lastTime = time;
+
+        updateUBO();
+
+        const encoder = engine.device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({
+            colorAttachments: [{ view: context.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0,0,0,1] }]
+        });
+        pass.setPipeline(renderPipeline);
+        pass.setBindGroup(0, bindGroup);
+        pass.draw(6);
+        pass.end();
+        engine.device.queue.submit([encoder.finish()]);
+
+        frameCount++;
+        if (time - lastFpsTime > 1000) {
+            ui.fps.innerText = `FPS: ${frameCount}`;
+            frameCount = 0;
+            lastFpsTime = time;
+        }
+
+        requestAnimationFrame(render);
+    };
+    requestAnimationFrame(render);
+
+    // --- Buttons ---
+    document.getElementById('btnReset').onclick = () => {
+        camera.x = 0n;
+        camera.y = 0n;
+        camera.scale = engine.floatToBig(4.0 / 800.0);
+    };
+
+    document.getElementById('btnTests').onclick = async () => {
+        log("Running Math Tests...");
+        try {
+            const A = engine.floatToBig(123.456);
+            const B = engine.floatToBig(789.123);
+
+            // Add
+            const sum = (await engine.runOp('add', [A], [B]))[0];
+            log(`ADD: 123.456 + 789.123 = ${engine.bigToFloatStr(sum)}`);
+
+            // Mul
+            const mul = (await engine.runOp('mul', [A], [B]))[0];
+            log(`MUL: 123.456 * 789.123 = ${engine.bigToFloatStr(mul)}`);
+
+            // Signed Test
+            const negA = -A;
+            const mulNeg = (await engine.runOp('mul', [negA], [B]))[0];
+            log(`MUL NEG: -123.456 * 789.123 = ${engine.bigToFloatStr(mulNeg)}`);
+
+            if (engine.bigToFloatStr(mulNeg).startsWith("-97421")) log("✅ Signed Math OK");
+            else log("❌ Signed Math Fail");
+
+            // Trig Test (Sin PI)
+            const PI = engine.floatToBig(3.14159265);
+            const sinPI = (await engine.sin([PI]))[0];
+            log(`SIN(PI): ${engine.bigToFloatStr(sinPI)} (Exp ~0)`);
+
+        } catch(e) {
+            log("Test Error: " + e);
+            console.error(e);
+        }
+    };
+})();
+    </script>
+</body>
+</html>

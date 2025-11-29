@@ -20,7 +20,36 @@ export class GPUEngine {
             requiredFeatures.push('shader-f64');
         }
         this.device = await adapter.requestDevice({ requiredFeatures });
-        this.shaderModule = this.device.createShaderModule({ code: shaderCode });
+
+        // Inject Constants L and F into shader code
+        // This ensures the shader compiled uses the same L and F as the engine configuration.
+        // It replaces "const L: u32 = ...;" lines or prepends them if not found.
+        let modifiedShader = shaderCode;
+        // Regex to match "const L: u32 = <number>u;"
+        const regexL = /const\s+L\s*:\s*u32\s*=\s*\d+u\s*;/;
+        const regexF = /const\s+F\s*:\s*u32\s*=\s*\d+u\s*;/;
+
+        if (regexL.test(modifiedShader)) {
+            modifiedShader = modifiedShader.replace(regexL, `const L: u32 = ${this.L}u;`);
+        } else {
+            modifiedShader = `const L: u32 = ${this.L}u;\n` + modifiedShader;
+        }
+
+        if (regexF.test(modifiedShader)) {
+            modifiedShader = modifiedShader.replace(regexF, `const F: u32 = ${this.F}u;`);
+        } else {
+            // Check if F is already added by prepending L (in case it wasn't there)
+            // But if it wasn't there, we just prepend it after L.
+            // Actually, simplest is to check again or just prepend if not found.
+            // If we prepended L, F might still be missing.
+             if (!regexF.test(modifiedShader)) {
+                modifiedShader = `const F: u32 = ${this.F}u;\n` + modifiedShader;
+             }
+        }
+
+        // Also handle the case where they might not be at the top, but we generally expect them to be global scope.
+
+        this.shaderModule = this.device.createShaderModule({ code: modifiedShader });
         // Expose shader compilation messages to help debug WGSL issues
         if (this.shaderModule.getCompilationInfo) {
             const info = await this.shaderModule.getCompilationInfo();
@@ -62,7 +91,7 @@ export class GPUEngine {
         }
     }
     _createConstants() {
-        const TWO_PI = "6487ED5110B4611A62633145C06E0E68948127044533E63A0105DF531D89CD9128A57F477590822765A1523B06C758169135064731F29C35C7433877995643640F11C89874136C055F60B84D2B196C27F0922872A437C0994C3817F723223126848A183D5D7716944B8411D44686475C62281D6F2C33D14D89CD0627721535451D00B026859752D5D00B89C6D39E837D8D6228076635292415516053748259463991C6E6A2689240361245787680D311E6A1221430F7C2037953258A3668393526E3082989D22784566270E03C1A32766397FC30846503715C6C075D1C689849E94D414619379685954B469950796865074E182522770248430541E1837F359051680186591295320076214C236E0D2C76A288E8367F7D21E428C6466986693892801F41B68F807466540673059695655513A4997096696C7540D3708D64C7203780D774653697968525049964585354972410";
+        const TWO_PI = "6487ED5110B4611A62633145C06E0E68948127044533E63A0105DF531D89CD9128A57F477590822765A1523B06C758169135064731F29C35C7433877995643640F11C89874136C055F60B84D2B196C27F0922872A437C0994C3817F723223126848A183D5D7716944B8411D44686475C62281D6F2C33D14D89CD0627721535451D00B026859752D5D00B89C6D39E837D8D6228076635292415516053748259463991C6E6A2689240361245787680D311E6A1221430F7C2037953258A3668393526E3082989D22784566270E03C1A32766397FC30846503715C6C075D1C689849E94D414619379685954B46995079685954B469950796865074E182522770248430541E1837F359051680186591295320076214C236E0D2C76A288E8367F7D21E428C6466986693892801F41B68F807466540673059695655513A4997096696C7540D3708D64C7203780D774653697968525049964585354972410";
         this.constants.two_pi = this.createBuffer(this.hexToFixed(TWO_PI));
     }
 

@@ -32,14 +32,41 @@ export class InputHandler {
 
     onWheel(e) {
         e.preventDefault();
-        // Zoom logic using integer arithmetic to avoid zero result
-        // Zoom In: scale * 0.9 (approx) -> scale * 9 / 10
-        // Zoom Out: scale * 1.1 (approx) -> scale * 11 / 10
+
+        // Current Mouse Position relative to center of screen (in pixels)
+        const rect = this.canvas.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const px = mx - this.canvas.width / 2;
+        const py = my - this.canvas.height / 2;
+
+        const oldScale = this.app.camera.scale;
+        let newScale = oldScale;
+
+        // Zoom logic
         if (e.deltaY < 0) {
-            this.app.camera.scale = (this.app.camera.scale * 9n) / 10n;
+            newScale = (oldScale * 9n) / 10n; // Zoom In
         } else {
-            this.app.camera.scale = (this.app.camera.scale * 11n) / 10n;
+            newScale = (oldScale * 11n) / 10n; // Zoom Out
         }
+
+        // Prevent scale from becoming 0
+        if (newScale === 0n) newScale = 1n;
+
+        // Adjust Center so that the point under the mouse remains stable
+        // Old World Point = Center + P * OldScale
+        // New World Point = NewCenter + P * NewScale
+        // We want Old World Point == New World Point
+        // Center + P * OldScale = NewCenter + P * NewScale
+        // NewCenter = Center + P * (OldScale - NewScale)
+
+        const diffScale = oldScale - newScale;
+        const offsetX = BigInt(Math.round(px)) * diffScale;
+        const offsetY = BigInt(Math.round(py)) * diffScale;
+
+        this.app.camera.x += offsetX;
+        this.app.camera.y += offsetY;
+        this.app.camera.scale = newScale;
     }
 
     onResize() {

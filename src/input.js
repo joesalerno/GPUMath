@@ -32,8 +32,14 @@ export class InputHandler {
 
     onWheel(e) {
         e.preventDefault();
-        const zoomFactor = (e.deltaY < 0) ? 10n / 11n : 11n / 10n;
-        this.app.camera.scale *= zoomFactor;
+        // Zoom logic using integer arithmetic to avoid zero result
+        // Zoom In: scale * 0.9 (approx) -> scale * 9 / 10
+        // Zoom Out: scale * 1.1 (approx) -> scale * 11 / 10
+        if (e.deltaY < 0) {
+            this.app.camera.scale = (this.app.camera.scale * 9n) / 10n;
+        } else {
+            this.app.camera.scale = (this.app.camera.scale * 11n) / 10n;
+        }
     }
 
     onResize() {

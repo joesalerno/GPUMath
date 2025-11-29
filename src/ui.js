@@ -7,13 +7,24 @@ export class UI {
             cy: document.getElementById('cy'),
             zoom: document.getElementById('zoom'),
             fps: document.getElementById('fps'),
+            maxIterRange: document.getElementById('maxIterRange'),
+            maxIterVal: document.getElementById('maxIterVal'),
         };
         this.setupButtons();
+        this.setupControls();
     }
 
     setupButtons() {
         document.getElementById('btnReset').onclick = () => this.app.resetView();
         document.getElementById('btnTests').onclick = () => this.app.runTests();
+    }
+
+    setupControls() {
+        this.elements.maxIterRange.oninput = (e) => {
+            const val = parseInt(e.target.value);
+            this.app.camera.maxIter = val;
+            this.elements.maxIterVal.innerText = val;
+        };
     }
 
     log(msg) {

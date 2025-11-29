@@ -17,7 +17,8 @@ class App {
             x: 0n,
             y: 0n,
             scale: 0n, // Initialized in resetView
-            resolution: new Float32Array([this.canvas.width, this.canvas.height])
+            resolution: new Float32Array([this.canvas.width, this.canvas.height]),
+            maxIter: 255
         };
         this.resetView();
     }
@@ -89,6 +90,7 @@ class App {
         this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.y]).buffer), 256);
         this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.scale]).buffer), 512);
         new Float32Array(this.uboData.buffer, 768, 2).set(this.camera.resolution);
+        new Uint32Array(this.uboData.buffer, 776, 1)[0] = this.camera.maxIter;
         this.engine.device.queue.writeBuffer(this.uniformBuffer, 0, this.uboData);
         this.ui.updateCameraInfo();
     }

@@ -25,6 +25,8 @@ struct Camera {
     centerY: LargeInt,
     scale: LargeInt, // Scale per pixel
     resolution: vec2<f32>,
+    maxIter: u32,
+    padding: u32,
 };
 @group(0) @binding(0) var<storage, read> cam : Camera;
 
@@ -105,14 +107,29 @@ fn gte(a: ptr<function, LargeInt>, b: LargeInt) -> bool {
 }
 
 // Scalar Div: A /= scalar (O(N))
+// Correct implementation using bitwise division to avoid float precision loss
 fn div_scalar(a: ptr<function, LargeInt>, b: u32) {
-    var r=0u;
+    var r = 0u;
     for(var k=0u; k<config.L; k++){
-        let i=config.L-1u-k;
-        let v=(*a).limbs[i];
-        let f=f32(r)*4294967296.0+f32(v);
-        (*a).limbs[i]=u32(f/f32(b));
-        r=u32(f%f32(b));
+        let i = config.L - 1u - k;
+        let v = (*a).limbs[i];
+
+        // Division of (r << 32 | v) by b
+        // We iterate 32 bits to perform the division
+        var current_r = r;
+        var q = 0u;
+        for (var bit_idx=0u; bit_idx<32u; bit_idx++) {
+            let shift = 31u - bit_idx;
+            let bit = (v >> shift) & 1u;
+            current_r = (current_r << 1u) | bit;
+            q = q << 1u;
+            if (current_r >= b) {
+                current_r -= b;
+                q |= 1u;
+            }
+        }
+        (*a).limbs[i] = q;
+        r = current_r;
     }
 }
 
@@ -381,7 +398,7 @@ fn fs_main(inp: VertexOutput) -> @location(0) vec4<f32> {
     var zy2: LargeInt;
 
     var iter = 0u;
-    let MAX = 255u;
+    let MAX = cam.maxIter;
 
     for (var i=0u; i<MAX; i++) {
         zx2 = sqr_fixed(zx);

@@ -22,32 +22,17 @@ export class GPUEngine {
         this.device = await adapter.requestDevice({ requiredFeatures });
 
         // Inject Constants L and F into shader code
-        // This ensures the shader compiled uses the same L and F as the engine configuration.
-        // It replaces "const L: u32 = ...;" lines or prepends them if not found.
         let modifiedShader = shaderCode;
-        // Regex to match "const L: u32 = <number>u;"
         const regexL = /const\s+L\s*:\s*u32\s*=\s*\d+u\s*;/;
         const regexF = /const\s+F\s*:\s*u32\s*=\s*\d+u\s*;/;
 
-        if (regexL.test(modifiedShader)) {
-            modifiedShader = modifiedShader.replace(regexL, `const L: u32 = ${this.L}u;`);
-        } else {
-            modifiedShader = `const L: u32 = ${this.L}u;\n` + modifiedShader;
-        }
+        modifiedShader = regexL.test(modifiedShader)
+            ? modifiedShader.replace(regexL, `const L: u32 = ${this.L}u;`)
+            : `const L: u32 = ${this.L}u;\n` + modifiedShader;
 
-        if (regexF.test(modifiedShader)) {
-            modifiedShader = modifiedShader.replace(regexF, `const F: u32 = ${this.F}u;`);
-        } else {
-            // Check if F is already added by prepending L (in case it wasn't there)
-            // But if it wasn't there, we just prepend it after L.
-            // Actually, simplest is to check again or just prepend if not found.
-            // If we prepended L, F might still be missing.
-             if (!regexF.test(modifiedShader)) {
-                modifiedShader = `const F: u32 = ${this.F}u;\n` + modifiedShader;
-             }
-        }
-
-        // Also handle the case where they might not be at the top, but we generally expect them to be global scope.
+        modifiedShader = regexF.test(modifiedShader)
+            ? modifiedShader.replace(regexF, `const F: u32 = ${this.F}u;`)
+            : `const F: u32 = ${this.F}u;\n` + modifiedShader;
 
         this.shaderModule = this.device.createShaderModule({ code: modifiedShader });
         // Expose shader compilation messages to help debug WGSL issues
@@ -75,11 +60,7 @@ export class GPUEngine {
                 layout: 'auto',
                 compute: {
                     module: this.shaderModule,
-                    entryPoint,
-                    constants: {
-                        L: this.L,
-                        F: this.F,
-                    }
+                    entryPoint
                 }
             });
         }

@@ -2,6 +2,7 @@ import { GPUEngine } from './gpu-engine.js';
 import { GPUOperations } from './gpu-operations.js';
 import { UI } from './ui.js';
 import { InputHandler } from './input.js';
+import { runSuite } from './test-cases.js';
 
 class App {
     constructor() {
@@ -72,12 +73,27 @@ class App {
     }
 
     createUBO() {
-        const UBO_SIZE = 256 + 256 + 256 + 16;
+        const L_BYTES = this.engine.L * 4;
+        // Layout: centerX(L), centerY(L), scale(L), resolution(2*4), maxIter(4), padding(4)
+        // Note: Storage buffer layout.
+        // We need to ensure alignment. LargeInt is array<u32, L>.
+        // L is usually multiple of 2 or 4.
+
+        this.uboOffsets = {
+            x: 0,
+            y: L_BYTES,
+            scale: L_BYTES * 2,
+            res: L_BYTES * 3,
+            iter: L_BYTES * 3 + 8
+        };
+
+        const TOTAL_SIZE = L_BYTES * 3 + 16; // +16 covers vec2 + u32 + padding
+
         this.uniformBuffer = this.engine.device.createBuffer({
-            size: UBO_SIZE,
+            size: TOTAL_SIZE,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
-        this.uboData = new Uint8Array(UBO_SIZE);
+        this.uboData = new Uint8Array(TOTAL_SIZE);
         this.bindGroup = this.engine.device.createBindGroup({
             layout: this.renderPipeline.getBindGroupLayout(0),
             entries: [
@@ -87,11 +103,11 @@ class App {
     }
 
     updateUBO() {
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.x]).buffer), 0);
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.y]).buffer), 256);
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.scale]).buffer), 512);
-        new Float32Array(this.uboData.buffer, 768, 2).set(this.camera.resolution);
-        new Uint32Array(this.uboData.buffer, 776, 1)[0] = this.camera.maxIter;
+        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.x]).buffer), this.uboOffsets.x);
+        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.y]).buffer), this.uboOffsets.y);
+        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.scale]).buffer), this.uboOffsets.scale);
+        new Float32Array(this.uboData.buffer, this.uboOffsets.res, 2).set(this.camera.resolution);
+        new Uint32Array(this.uboData.buffer, this.uboOffsets.iter, 1)[0] = this.camera.maxIter;
         this.engine.device.queue.writeBuffer(this.uniformBuffer, 0, this.uboData);
         this.ui.updateCameraInfo();
     }
@@ -129,30 +145,7 @@ class App {
     }
 
     async runTests() {
-        this.log("Running Math Tests...");
-        try {
-            const A = this.engine.floatToBig(123.456);
-            const B = this.engine.floatToBig(789.123);
-            const negA = -A;
-
-            const sum = await this.math.add([A], [B]);
-            this.log(`ADD: 123.456 + 789.123 = ${this.engine.bigToFloatStr(sum[0])}`);
-
-            const mul = await this.math.mul([A], [B]);
-            this.log(`MUL: 123.456 * 789.123 = ${this.engine.bigToFloatStr(mul[0])}`);
-
-            const mulNeg = await this.math.mul([negA], [B]);
-            this.log(`MUL NEG: -123.456 * 789.123 = ${this.engine.bigToFloatStr(mulNeg[0])}`);
-            if (this.engine.bigToFloatStr(mulNeg[0]).startsWith("-97421")) this.log("✅ Signed Math OK");
-            else this.log("❌ Signed Math Fail");
-
-            const PI = this.engine.floatToBig(3.14159265);
-            const sinPI = await this.math.sin([PI]);
-            this.log(`SIN(PI): ${this.engine.bigToFloatStr(sinPI[0])} (Exp ~0)`);
-        } catch (e) {
-            this.log("Test Error: " + e);
-            console.error(e);
-        }
+        await runSuite(this.engine, this.math, this.log.bind(this));
     }
 }
 

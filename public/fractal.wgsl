@@ -356,7 +356,7 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
         vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(1.0, 1.0)
     );
     var out: VertexOutput;
-    out.pos = vec4(pos[idx], 0.0, 1.0);
+    out.pos = vec4<f32>(pos[idx], 0.0, 1.0);
     out.uv = pos[idx]; // -1.0 to 1.0
     return out;
 }

@@ -8,7 +8,9 @@ class App {
         this.canvas = document.getElementById('gpuCanvas');
         this.context = this.canvas.getContext('webgpu');
 
-        this.engine = new GPUEngine(64, 32); // L=64, F=32
+        // Reduced precision to L=16 (512 bits) to prevent GPU hang (TDR).
+        // F=8 provides 256 bits of fractional precision, leaving 256 bits for integer part.
+        this.engine = new GPUEngine(16, 8);
         this.math = new GPUOperations(this.engine);
         this.ui = new UI(this);
         this.input = new InputHandler(this);

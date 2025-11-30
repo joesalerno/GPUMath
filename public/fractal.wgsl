@@ -2,12 +2,6 @@
 const L: u32 = 64u;
 const F: u32 = 32u;
 
-struct Config {
-    L: u32,
-    F: u32,
-};
-@group(0) @binding(4) var<uniform> config: Config;
-
 struct LargeInt { limbs: array<u32, L>, };
 struct Data { values: array<LargeInt>, };
 

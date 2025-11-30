@@ -65,12 +65,6 @@ export class GPUEngine {
             }
         }
 
-        this.configBuffer = this.device.createBuffer({
-            size: 16, // L, F, and padding
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-        });
-        const configData = new Uint32Array([this.L, this.F]);
-        this.device.queue.writeBuffer(this.configBuffer, 0, configData);
         this._createConstants();
         console.log("GPU Engine Initialized");
     }
@@ -113,8 +107,7 @@ export class GPUEngine {
                 { binding: 0, resource: { buffer: bufA } },
                 { binding: 1, resource: { buffer: bufB } },
                 { binding: 2, resource: { buffer: bufR } },
-                { binding: 3, resource: { buffer: bufC } },
-                { binding: 4, resource: { buffer: this.configBuffer } }
+                { binding: 3, resource: { buffer: bufC } }
             ]
         });
 

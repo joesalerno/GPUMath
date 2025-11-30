@@ -79,8 +79,7 @@ class App {
         this.bindGroup = this.engine.device.createBindGroup({
             layout: this.renderPipeline.getBindGroupLayout(0),
             entries: [
-                { binding: 0, resource: { buffer: this.uniformBuffer } },
-                { binding: 4, resource: { buffer: this.engine.configBuffer } }
+                { binding: 0, resource: { buffer: this.uniformBuffer } }
             ]
         });
     }

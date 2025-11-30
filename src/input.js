@@ -62,7 +62,8 @@ export class InputHandler {
 
         const diffScale = oldScale - newScale;
         const offsetX = BigInt(Math.round(px)) * diffScale;
-        const offsetY = BigInt(Math.round(py)) * diffScale;
+        // Invert py because screen Y is down, but world Y is up
+        const offsetY = BigInt(Math.round(-py)) * diffScale;
 
         this.app.camera.x += offsetX;
         this.app.camera.y += offsetY;

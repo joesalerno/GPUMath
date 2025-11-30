@@ -9,8 +9,6 @@ class App {
         this.canvas = document.getElementById('gpuCanvas');
         this.context = this.canvas.getContext('webgpu');
 
-        // Reduced precision to L=16 (512 bits) to prevent GPU hang (TDR).
-        // F=8 provides 256 bits of fractional precision, leaving 256 bits for integer part.
         this.engine = new GPUEngine(16, 8);
         this.math = new GPUOperations(this.engine);
         this.ui = new UI(this);
@@ -19,18 +17,25 @@ class App {
         this.camera = {
             x: 0n,
             y: 0n,
-            scale: 0n, // Initialized in resetView
+            scale: 0n,
             resolution: new Float32Array([this.canvas.width, this.canvas.height]),
-            maxIter: 255
+            maxIter: 50 // Reduced default for stability
         };
+        this.isDirty = true; // render flag
         this.resetView();
     }
 
     log(msg) {
         this.ui.log(msg);
+        console.log("[APP] " + msg);
     }
 
     async init() {
+        if (!navigator.gpu) {
+            this.log("WebGPU not supported by browser.");
+            return;
+        }
+
         try {
             const shaderCode = await fetch('/fractal.wgsl').then(res => res.text());
             await this.engine.init(shaderCode);
@@ -39,6 +44,14 @@ class App {
             this.log("Error: " + e.message);
             console.error(e);
             return;
+        }
+
+        // Hook device loss after init
+        if (this.engine.device) {
+             this.engine.device.lost.then((info) => {
+                this.log(`GPU Device Lost: ${info.message}`);
+                console.error("GPU Device Lost", info);
+            });
         }
 
         this.setupCanvas();
@@ -50,7 +63,11 @@ class App {
 
     setupCanvas() {
         const format = navigator.gpu.getPreferredCanvasFormat();
-        this.context.configure({ device: this.engine.device, format });
+        this.context.configure({
+            device: this.engine.device,
+            format,
+            alphaMode: 'opaque' // Explicitly set opaque
+        });
         this.renderPipeline = this.engine.createRenderPipeline(format, 'vs_main', 'fs_main');
     }
 
@@ -58,6 +75,8 @@ class App {
         this.camera.x = 0n;
         this.camera.y = 0n;
         this.camera.scale = this.engine.floatToBig(4.0 / this.canvas.width);
+        this.camera.maxIter = 50; // Ensure reset also respects stability
+        this.isDirty = true;
     }
 
     resize() {
@@ -65,20 +84,20 @@ class App {
         this.canvas.height = window.innerHeight;
         this.camera.resolution[0] = this.canvas.width;
         this.camera.resolution[1] = this.canvas.height;
+        this.isDirty = true;
 
         if (this.engine.device) {
             const format = navigator.gpu.getPreferredCanvasFormat();
-            this.context.configure({ device: this.engine.device, format });
+            this.context.configure({
+                device: this.engine.device,
+                format,
+                alphaMode: 'opaque'
+            });
         }
     }
 
     createUBO() {
         const L_BYTES = this.engine.L * 4;
-        // Layout: centerX(L), centerY(L), scale(L), resolution(2*4), maxIter(4), padding(4)
-        // Note: Storage buffer layout.
-        // We need to ensure alignment. LargeInt is array<u32, L>.
-        // L is usually multiple of 2 or 4.
-
         this.uboOffsets = {
             x: 0,
             y: L_BYTES,
@@ -87,13 +106,18 @@ class App {
             iter: L_BYTES * 3 + 8
         };
 
-        const TOTAL_SIZE = L_BYTES * 3 + 16; // +16 covers vec2 + u32 + padding
+        const TOTAL_SIZE = L_BYTES * 3 + 16;
 
         this.uniformBuffer = this.engine.device.createBuffer({
             size: TOTAL_SIZE,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
         });
         this.uboData = new Uint8Array(TOTAL_SIZE);
+
+        // Views for faster setting
+        this.uboResView = new Float32Array(this.uboData.buffer, this.uboOffsets.res, 2);
+        this.uboIterView = new Uint32Array(this.uboData.buffer, this.uboOffsets.iter, 1);
+
         this.bindGroup = this.engine.device.createBindGroup({
             layout: this.renderPipeline.getBindGroupLayout(0),
             entries: [
@@ -103,24 +127,35 @@ class App {
     }
 
     updateUBO() {
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.x]).buffer), this.uboOffsets.x);
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.y]).buffer), this.uboOffsets.y);
-        this.uboData.set(new Uint8Array(this.engine.toBuffer([this.camera.scale]).buffer), this.uboOffsets.scale);
-        new Float32Array(this.uboData.buffer, this.uboOffsets.res, 2).set(this.camera.resolution);
-        new Uint32Array(this.uboData.buffer, this.uboOffsets.iter, 1)[0] = this.camera.maxIter;
+        const bx = this.engine.toBuffer([this.camera.x]);
+        this.uboData.set(new Uint8Array(bx.buffer), this.uboOffsets.x);
+
+        const by = this.engine.toBuffer([this.camera.y]);
+        this.uboData.set(new Uint8Array(by.buffer), this.uboOffsets.y);
+
+        const bs = this.engine.toBuffer([this.camera.scale]);
+        this.uboData.set(new Uint8Array(bs.buffer), this.uboOffsets.scale);
+
+        this.uboResView.set(this.camera.resolution);
+        this.uboIterView[0] = this.camera.maxIter;
+
         this.engine.device.queue.writeBuffer(this.uniformBuffer, 0, this.uboData);
         this.ui.updateCameraInfo();
+        this.isDirty = false;
     }
 
     render(time) {
-        this.updateUBO();
+        if (this.isDirty) {
+            this.updateUBO();
+        }
+
         const encoder = this.engine.device.createCommandEncoder();
         const pass = encoder.beginRenderPass({
             colorAttachments: [{
                 view: this.context.getCurrentTexture().createView(),
                 loadOp: 'clear',
                 storeOp: 'store',
-                clearValue: [0, 0, 0, 1]
+                clearValue: [0.1, 0.1, 0.1, 1] // Dark Grey
             }]
         });
         pass.setPipeline(this.renderPipeline);

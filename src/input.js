@@ -28,12 +28,12 @@ export class InputHandler {
         this.lastMouse = { x: e.clientX, y: e.clientY };
         this.app.camera.x += BigInt(-dx) * this.app.camera.scale;
         this.app.camera.y += BigInt(-dy) * this.app.camera.scale;
+        this.app.isDirty = true;
     }
 
     onWheel(e) {
         e.preventDefault();
 
-        // Current Mouse Position relative to center of screen (in pixels)
         const rect = this.canvas.getBoundingClientRect();
         const mx = e.clientX - rect.left;
         const my = e.clientY - rect.top;
@@ -43,30 +43,33 @@ export class InputHandler {
         const oldScale = this.app.camera.scale;
         let newScale = oldScale;
 
-        // Zoom logic
         if (e.deltaY < 0) {
             newScale = (oldScale * 9n) / 10n; // Zoom In
         } else {
             newScale = (oldScale * 11n) / 10n; // Zoom Out
         }
 
-        // Prevent scale from becoming 0
         if (newScale === 0n) newScale = 1n;
 
-        // Adjust Center so that the point under the mouse remains stable
-        // Old World Point = Center + P * OldScale
-        // New World Point = NewCenter + P * NewScale
-        // We want Old World Point == New World Point
-        // Center + P * OldScale = NewCenter + P * NewScale
-        // NewCenter = Center + P * (OldScale - NewScale)
-
         const diffScale = oldScale - newScale;
-        const offsetX = BigInt(Math.round(px)) * diffScale;
-        const offsetY = BigInt(Math.round(py)) * diffScale;
+
+        // Improved precision: px is float, diffScale is fixed point BigInt.
+        // We multiply px by a large factor (e.g., 256) to keep sub-pixel precision,
+        // multiply by diffScale, then divide by the factor.
+        // Since diffScale is already scaled by F, we don't need to shift it further,
+        // just handle the scalar multiplication carefully.
+
+        const K = 1000n;
+        const pxBig = BigInt(Math.round(px * Number(K)));
+        const pyBig = BigInt(Math.round(py * Number(K)));
+
+        const offsetX = (pxBig * diffScale) / K;
+        const offsetY = (pyBig * diffScale) / K;
 
         this.app.camera.x += offsetX;
         this.app.camera.y += offsetY;
         this.app.camera.scale = newScale;
+        this.app.isDirty = true;
     }
 
     onResize() {
